@@ -1,14 +1,13 @@
-# Everything a runtime release is built from. A release is "<PYTHON>-r<REVISION>"; bump REVISION
-# whenever anything below changes without a Python version change (and reset it to 1 when PYTHON
-# changes). Sourced by the build scripts; sha256 sums are checked after download.
-
-PYTHON=3.13.2
-REVISION=1
+# shellcheck shell=bash disable=SC2034
+# Build inputs shared by every Python series. Each series has its own versions/<series>.sh, which
+# sources this file and sets PYTHON, REVISION and PYTHON_SHA256, plus anything that has to differ
+# for that series (e.g. a newer Boost or package versions supporting a newer Python).
+#
+# A release is "<PYTHON>-r<REVISION>". Changing anything here changes every series: bump REVISION
+# in each series file that should be re-released. sha256 sums are checked after download.
 
 # Linux build environment: manylinux_2_28 (AlmaLinux 8, glibc 2.28, GCC 14 from gcc-toolset)
 MANYLINUX_I686=quay.io/pypa/manylinux_2_28_i686@sha256:baf927c001d9dfead35e53de68b2c113b623155b7a878cc45e2e1ad61c9fb5e7
-
-PYTHON_SHA256=d984bcc57cd67caab26f7def42e523b1c015bbc5dc07836cf4f0b63fa159eb56
 
 OPENSSL=3.5.4
 OPENSSL_SHA256=967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99
@@ -28,8 +27,8 @@ POSTGRESQL_SHA256=e0630a3600aea27511715563259ec2111cd5f4353a4b040e0be827f94cd7a8
 BOOST=1.87.0
 BOOST_SHA256=f55c340aa49763b1925ccf02b2e83f35fdcf634c9d5164a2acb87540173c741d
 
-# Compiled packages Source.Python vendors; versions must match its
-# addons/source-python/packages/site-packages/requirements.txt.
+# Compiled packages Source.Python vendors; versions must match the requirements.txt in its
+# addons/source-python/packages/site-packages for the Source.Python branch pinning the release.
 GREENLET=3.2.0
 PSYCOPG2=2.9.10
 MARKUPSAFE=3.0.2

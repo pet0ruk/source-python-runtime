@@ -1,13 +1,19 @@
-# Builds the runtime bundles from versions.sh. Every run uploads them as workflow artifacts;
-# with "release" set, a run on main also publishes them as the GitHub release
-# <python>-r<revision> (refusing to replace an existing one: bump REVISION instead).
+# Builds the runtime bundles, one job per Python series (versions/<series>.sh) and platform.
+# Every run uploads them as workflow artifacts. Pull requests build every series. A manual run
+# builds the series given (default all); with "release" set, a run on main also publishes each
+# built series as the GitHub release <python>-r<revision>, skipping series whose release already
+# exists (a release is never replaced: bump REVISION instead).
 name: Build runtime
 
 on:
   workflow_dispatch:
     inputs:
+      series:
+        description: Python series to build (e.g. 3.13), or "all"
+        type: string
+        default: all
       release:
-        description: Publish the release (main only)
+        description: Publish the releases (main only)
         type: boolean
         default: false
   pull_request:
@@ -16,61 +22,96 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.event.pull_request.number || github.ref }}
+  group: build-${{ github.event.pull_request.number || github.ref }}-${{ inputs.series || 'all' }}
   cancel-in-progress: true
 
 jobs:
+  series:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v7 # v7.0.1
+      - id: list
+        env:
+          SERIES: ${{ inputs.series || 'all' }}
+        run: |
+          all=$(find versions -name '3.*.sh' -printf '%f\n' | sed 's/\.sh$//' | sort -V | jq -Rnc '[inputs]')
+          if [ "$SERIES" = all ]; then
+            echo "list=$all" >> "$GITHUB_OUTPUT"
+          elif jq -e --arg s "$SERIES" 'index($s)' <<< "$all" >/dev/null; then
+            echo "list=$(jq -cn --arg s "$SERIES" '[$s]')" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::no versions/$SERIES.sh (have: $all)"; exit 1
+          fi
+
   linux-i686:
+    needs: series
+    name: linux-i686 (${{ matrix.series }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        series: ${{ fromJSON(needs.series.outputs.list) }}
+    env:
+      SERIES: ${{ matrix.series }}
     steps:
       - uses: actions/checkout@v7 # v7.0.1
 
       - name: Downloaded sources
         uses: actions/cache@v6 # v6.1.0
         with:
-          path: out/src
-          key: sources-${{ hashFiles('versions.sh') }}
+          path: out/${{ matrix.series }}/src
+          key: sources-${{ matrix.series }}-${{ hashFiles('versions/common.sh', format('versions/{0}.sh', matrix.series)) }}
 
       - name: Build
-        run: ./build-linux.sh out
+        run: ./build-linux.sh "$SERIES" "out/$SERIES"
 
       - uses: actions/upload-artifact@v7 # v7.0.2
         with:
-          name: bundle-linux-i686
+          name: bundle-${{ matrix.series }}-linux-i686
           path: |
-            out/*.tar.gz
-            out/*.tar.gz.sha256
+            out/${{ matrix.series }}/*.tar.gz
+            out/${{ matrix.series }}/*.tar.gz.sha256
 
       - uses: actions/upload-artifact@v7 # v7.0.2
         if: always()
         with:
-          name: logs-linux-i686
-          path: out/logs/
+          name: logs-${{ matrix.series }}-linux-i686
+          path: out/${{ matrix.series }}/logs/
 
   release:
-    needs: linux-i686
+    needs: [series, linux-i686]
     if: github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main'
+    name: release (${{ matrix.series }})
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        series: ${{ fromJSON(needs.series.outputs.list) }}
     steps:
       - uses: actions/checkout@v7 # v7.0.1
       - uses: actions/download-artifact@v8 # v8.0.2
         with:
           path: dist
-          pattern: bundle-*
+          pattern: bundle-${{ matrix.series }}-*
           merge-multiple: true
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          SERIES: ${{ matrix.series }}
         run: |
-          . ./versions.sh
+          # shellcheck source=/dev/null
+          . "versions/$SERIES.sh"
           TAG=$PYTHON-r$REVISION
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::release $TAG already exists; bump REVISION in versions.sh"; exit 1
+            echo "::notice::release $TAG already exists, not replacing it (bump REVISION in versions/$SERIES.sh to publish a new one)"
+            exit 0
           fi
           (cd dist && cat ./*.sha256 > SHA256SUMS && sha256sum -c SHA256SUMS)
           gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
-            --notes "Python $PYTHON runtime for Source.Python, revision $REVISION. Built from $GITHUB_SHA; versions in versions.sh." \
+            --notes "Python $PYTHON runtime for Source.Python, revision $REVISION. Built from $GITHUB_SHA; inputs in versions/common.sh and versions/$SERIES.sh." \
             dist/*.tar.gz dist/SHA256SUMS
