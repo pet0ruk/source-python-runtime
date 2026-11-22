@@ -139,17 +139,19 @@ cd "$W/boost_${BOOST//./_}"
     python="$PYV" --with-python stage > "$L/boost.log" 2>&1 || { tail -40 "$L/boost.log"; exit 1; }
 { strings -a "stage/lib/libboost_python$PYN.a" | grep '^GCC: ' | sort -u; } || true
 
-echo ">> wheels: greenlet $GREENLET, psycopg2 $PSYCOPG2, markupsafe $MARKUPSAFE, charset-normalizer $CHARSET_NORMALIZER"
+echo ">> wheels: greenlet $GREENLET, psycopg2 $PSYCOPG2, markupsafe $MARKUPSAFE, charset-normalizer $CHARSET_NORMALIZER, sqlalchemy $SQLALCHEMY"
 mkdir -p "$W/wheels" "$W/repaired" "$W/site"
-# CHARSET_NORMALIZER_USE_MYPYC: the mypyc-compiled build, as published on PyPI.
+# CHARSET_NORMALIZER_USE_MYPYC: the mypyc-compiled build, as published on PyPI;
+# REQUIRE_SQLALCHEMY_CEXT: fail instead of falling back to pure Python without its extensions.
 # LDFLAGS: libstdc++/libgcc linked statically and kept private, so the C++ ones (greenlet) don't
 # depend on the server's libstdc++: some games ship an old one in bin/ that srcds puts first on
 # the library path (L4D2: no CXXABI_1.3.7).
-PATH=$DP/bin:$PATH CHARSET_NORMALIZER_USE_MYPYC=1 HOME=$W \
+PATH=$DP/bin:$PATH CHARSET_NORMALIZER_USE_MYPYC=1 REQUIRE_SQLALCHEMY_CEXT=1 HOME=$W \
     LDFLAGS="-static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,-z,noexecstack" \
     $PYBIN -m pip -q wheel --no-deps \
     --no-binary :all: -w "$W/wheels" "greenlet==$GREENLET" "psycopg2==$PSYCOPG2" \
-    "markupsafe==$MARKUPSAFE" "charset-normalizer==$CHARSET_NORMALIZER" > "$L/wheels.log" 2>&1 \
+    "markupsafe==$MARKUPSAFE" "charset-normalizer==$CHARSET_NORMALIZER" "sqlalchemy==$SQLALCHEMY" \
+    > "$L/wheels.log" 2>&1 \
     || { tail -30 "$L/wheels.log"; exit 1; }
 for w in "$W"/wheels/*.whl; do
     LD_LIBRARY_PATH=$DP/lib:$P/lib auditwheel repair --plat "$PLATFORM" -w "$W/repaired" "$w" >> "$L/auditwheel.log" 2>&1
@@ -174,7 +176,7 @@ rm -f "$R"/lib-dynload/*_test*.so "$R"/lib-dynload/xx*.so
 cp "$P/lib/python$PYV/_sysconfigdata__linux_i386-linux-gnu.py" "$S/"
 cp -L "$P/lib/libpython$PYV.so.1.0" "$R/plat-linux/"
 cp -L /tmp/sqlite-so/lib/libsqlite3.so.0 "$R/plat-linux/"
-cp -a "$W"/site/{greenlet,psycopg2,markupsafe,charset_normalizer} "$S/"
+cp -a "$W"/site/{greenlet,psycopg2,markupsafe,charset_normalizer,sqlalchemy} "$S/"
 cp -a "$W"/site/*.libs "$S/" 2>/dev/null || true
 rm -rf "$S/greenlet/tests"
 # build-time rpaths (/tmp/...) must not leak into the shipped files (the wheels' rpaths were
@@ -208,6 +210,7 @@ greenlet=$GREENLET
 psycopg2=$PSYCOPG2
 markupsafe=$MARKUPSAFE
 charset_normalizer=$CHARSET_NORMALIZER
+sqlalchemy=$SQLALCHEMY
 EOF
 
 echo ">> checks"
@@ -222,16 +225,19 @@ if grep -vE ' (libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\
     echo "!! unexpected NEEDED libraries (above)" >&2; exit 1
 fi
 # the shipped runtime imports its native modules and packages from the bundle alone
+# test-only: sqlalchemy imports typing_extensions, which Source.Python vendors as pure Python
+HOME=$W "$PYBIN" -m pip -q install --no-deps --target "$W/testdeps" typing_extensions==4.13.2 > "$L/testdeps.log" 2>&1
 LD_LIBRARY_PATH=$R/plat-linux "$PYBIN" -I -S -B -c '
 import sys
 b = sys.argv[1]
 r = b + "/runtime/addons/source-python/Python3"
-sys.path[:] = [r, r + "/lib-dynload", b + "/runtime/addons/source-python/packages/site-packages"]
+sys.path[:] = [r, r + "/lib-dynload", b + "/runtime/addons/source-python/packages/site-packages", sys.argv[2]]
 import ssl, ctypes, sqlite3, zlib, lzma, bz2, hashlib, json, decimal
-import greenlet, psycopg2, markupsafe, charset_normalizer.md
+import greenlet, psycopg2, markupsafe, charset_normalizer.md, sqlalchemy.cyextension.collections
 assert markupsafe._speedups and greenlet._greenlet
 assert charset_normalizer.md.__file__.endswith(".so"), charset_normalizer.md.__file__
-for m in (ssl, sqlite3, greenlet, psycopg2, markupsafe):
+assert sqlalchemy.cyextension.collections.__file__.endswith(".so")
+for m in (ssl, sqlite3, greenlet, psycopg2, markupsafe, sqlalchemy):
     assert m.__file__.startswith(b), (m.__name__, m.__file__)
-print("   imports ok:", ssl.OPENSSL_VERSION, "| sqlite", sqlite3.sqlite_version, "| psycopg2", psycopg2.__version__)' "$B" 2>&1 | tee "$L/imports.txt"
+print("   imports ok:", ssl.OPENSSL_VERSION, "| sqlite", sqlite3.sqlite_version, "| psycopg2", psycopg2.__version__)' "$B" "$W/testdeps" 2>&1 | tee "$L/imports.txt"
 du -sh "$B"

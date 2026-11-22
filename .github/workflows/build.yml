@@ -81,8 +81,48 @@ jobs:
           name: logs-${{ matrix.series }}-linux-i686
           path: out/${{ matrix.series }}/logs/
 
+  win32:
+    needs: series
+    name: win32 (${{ matrix.series }})
+    # the oldest supported MSVC toolset (v143), see build-windows.sh
+    runs-on: windows-2022
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        series: ${{ fromJSON(needs.series.outputs.list) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      SERIES: ${{ matrix.series }}
+    steps:
+      - uses: actions/checkout@v7 # v7.0.1
+
+      - name: Downloaded sources
+        uses: actions/cache@v6 # v6.1.0
+        with:
+          path: out/${{ matrix.series }}/src
+          key: sources-win32-${{ matrix.series }}-${{ hashFiles('versions/common.sh', format('versions/{0}.sh', matrix.series)) }}
+
+      - name: Build
+        run: ./build-windows.sh "$SERIES" "out/$SERIES"
+
+      - uses: actions/upload-artifact@v7 # v7.0.2
+        with:
+          name: bundle-${{ matrix.series }}-win32
+          path: |
+            out/${{ matrix.series }}/*.zip
+            out/${{ matrix.series }}/*.zip.sha256
+
+      - uses: actions/upload-artifact@v7 # v7.0.2
+        if: always()
+        with:
+          name: logs-${{ matrix.series }}-win32
+          path: out/${{ matrix.series }}/logs/
+
   release:
-    needs: [series, linux-i686]
+    needs: [series, linux-i686, win32]
     if: github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main'
     name: release (${{ matrix.series }})
     runs-on: ubuntu-latest
@@ -114,4 +154,4 @@ jobs:
           (cd dist && cat ./*.sha256 > SHA256SUMS && sha256sum -c SHA256SUMS)
           gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
             --notes "Python $PYTHON runtime for Source.Python, revision $REVISION. Built from $GITHUB_SHA; inputs in versions/common.sh and versions/$SERIES.sh." \
-            dist/*.tar.gz dist/SHA256SUMS
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS
