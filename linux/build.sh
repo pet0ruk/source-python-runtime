@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds the Linux i686 runtime bundle. Runs inside linux/Dockerfile (see ../build-linux.sh):
+# Builds the Linux i686 runtime bundle. Runs inside the manylinux image (see ../build-linux.sh):
 #
 #   linux/build.sh <repo dir> <out dir>
 #
