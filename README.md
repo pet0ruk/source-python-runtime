@@ -87,7 +87,8 @@ Layout:
 ```
 sp-python-<release>-<platform>/
   manifest.txt     key=value: release, platform, python, python_abi, soabi, libpython, versions
-  build/include/python3.X/                       headers
+  build/include/python3.X/                       Python headers
+  build/include/boost/                           Boost headers (all of them; manifest boost_include)
   build/lib/       Linux: libpython3.X.a, libpython3.X.so.1.0, libboost_python3X.a
                    Windows: python3X.lib, python3.lib, libboost_python3X-vc143-mt-s-x32-<boost>.lib
   runtime/         laid over the Source.Python release tree:

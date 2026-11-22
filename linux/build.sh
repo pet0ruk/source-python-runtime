@@ -166,6 +166,9 @@ mkdir -p "$B/build/lib" "$B/build/include" "$R/plat-linux" "$S" "$B/licenses"
 cp -a "$P/include/python$PYV" "$B/build/include/"
 cp -L "$P/lib/libpython$PYV.so.1.0" "$P/lib/python$PYV/config-$PYV-i386-linux-gnu/libpython$PYV.a" "$B/build/lib/"
 cp "$W/boost_${BOOST//./_}/stage/lib/libboost_python$PYN.a" "$B/build/lib/"
+# all of Boost's headers (header-only, so they match Boost.Python above by construction);
+# Source.Python uses other Boost libraries besides Boost.Python
+cp -a "$W/boost_${BOOST//./_}/boost" "$B/build/include/"
 # runtime/: laid over the Source.Python tree. The stdlib without the parts a server doesn't use
 # (the same selection Source.Python has always shipped).
 (cd "$P/lib/python$PYV" && tar -c --exclude=__pycache__ --exclude='./test' --exclude='./idlelib' \
@@ -199,6 +202,7 @@ python_abi=$PYV
 soabi=$SOABI
 libpython=libpython$PYV.so.1.0
 boost=$BOOST
+boost_include=build/include
 openssl=$OPENSSL
 libffi=$LIBFFI
 zlib=$ZLIB
