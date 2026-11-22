@@ -25,7 +25,7 @@ Assets are named after Python's wheel platform tags:
 | Asset | Status |
 |---|---|
 | `sp-python-<release>-manylinux_2_28_i686.tar.gz` | built here |
-| `sp-python-<release>-win32.zip` | not yet (Windows still uses Source.Python's vendored files) |
+| `sp-python-<release>-win32.zip` | built here |
 | `…-manylinux_2_28_x86_64`, `…-win_amd64` | reserved for 64-bit builds |
 
 plus `SHA256SUMS`.
@@ -35,6 +35,7 @@ plus `SHA256SUMS`.
 ```bash
 ./build-linux.sh 3.13 [out]   # Docker; ~10 min. out/ (default out/3.13) gets the .tar.gz,
                               # .sha256, logs/ and src/
+./build-windows.sh 3.13 [out] # Git Bash on Windows with Visual Studio 2022 (v143); the .zip
 ```
 
 The GitHub workflow builds every series on pull requests, and the series given (default all) on
@@ -50,7 +51,7 @@ Built in `manylinux_2_28_i686` (AlmaLinux 8, glibc 2.28):
 - **OpenSSL, libffi, zlib, bzip2, xz, sqlite** built from source and linked statically into the
   extension modules with their symbols hidden, so the server needs none of them installed and an
   older copy already loaded by the server can't be bound instead.
-- **greenlet, psycopg2, markupsafe, charset-normalizer** built from source as wheels and repaired
+- **greenlet, psycopg2, markupsafe, charset-normalizer, sqlalchemy** built from source as wheels and repaired
   with auditwheel (psycopg2 carries a minimal libpq and its own OpenSSL, like `psycopg2-binary`),
   with libstdc++/libgcc linked statically: some games ship an old libstdc++ that the server loads
   first (L4D2).
@@ -65,15 +66,33 @@ Not built: `_tkinter`, `_curses`, `readline`, `_dbm`/`_gdbm`, `_uuid` (their sys
 differ between distributions and a server doesn't need them; `uuid` falls back to pure Python),
 and CPython's test modules.
 
+## Windows (win32) bundle
+
+Built on `windows-2022`:
+
+- **CPython**: the official 32-bit build (NuGet package `pythonx86`, sha256 pinned per series),
+  repackaged: `python3X.dll`, its `DLLs/` (extension modules, OpenSSL, libffi, sqlite), the stdlib
+  (without test, idlelib, tkinter, turtledemo; the package has no Tcl/Tk or test modules),
+  headers and import libraries.
+- **Boost.Python**, built against it with MSVC v143 (Visual Studio 2022, the oldest supported
+  toolset: newer ones link its libraries, not the other way round), statically and with the
+  static C runtime (`/MT`), like Source.Python's Windows build.
+- **markupsafe, charset-normalizer, sqlalchemy** from their official `win32` wheels; **greenlet**
+  (no `win32` wheel) built from source. psycopg2 isn't shipped on Windows.
+
+The same import check runs at the end of the build.
+
 Layout:
 
 ```
 sp-python-<release>-<platform>/
   manifest.txt     key=value: release, platform, python, python_abi, soabi, libpython, versions
   build/include/python3.X/                       headers
-  build/lib/       libpython3.X.a, libpython3.X.so.1.0, libboost_python3X.a
+  build/lib/       Linux: libpython3.X.a, libpython3.X.so.1.0, libboost_python3X.a
+                   Windows: python3X.lib, python3.lib, libboost_python3X-vc143-mt-s-x32-<boost>.lib
   runtime/         laid over the Source.Python release tree:
-    addons/source-python/Python3/                 stdlib, lib-dynload/, plat-linux/
+    addons/source-python/Python3/                 stdlib, lib-dynload/ + plat-linux/ (Linux)
+                                                  or plat-win/ (Windows)
     addons/source-python/packages/site-packages/  the compiled packages, _sysconfigdata
   licenses/
 ```
