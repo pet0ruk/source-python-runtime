@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds the Linux i686 runtime bundle. Runs inside the manylinux image (see ../build-linux.sh):
 #
-#   linux/build.sh <repo dir> <out dir>
+#   linux/build.sh <repo dir> <series> <out dir>
 #
 # - CPython is configured for i686 (SOABI cpython-3XX-i386-linux-gnu) with --enable-shared.
 # - OpenSSL, libffi, zlib, bzip2, xz and sqlite are built from source as static PIC archives and
@@ -19,9 +19,11 @@
 # Output in <out>: the bundle directory sp-python-<release>-<platform>/ and logs/.
 set -euo pipefail
 REPO=$(realpath "${1:?repo dir}")
-OUT=$(realpath -m "${2:?out dir}")
-# shellcheck source=../versions.sh
-. "$REPO/versions.sh"
+SERIES=${2:?series}
+OUT=$(realpath -m "${3:?out dir}")
+# shellcheck source=../versions/3.13.sh
+. "$REPO/versions/$SERIES.sh"
+case $PYTHON in "$SERIES".*) ;; *) echo "!! versions/$SERIES.sh sets PYTHON=$PYTHON" >&2; exit 2;; esac
 PLATFORM=manylinux_2_28_i686
 PYV=${PYTHON%.*}                       # 3.13
 PYN=${PYV/./}                          # 313
@@ -45,7 +47,7 @@ fetch() {
     fi
     sum=$(sha256sum "$SRC/$file" | cut -d' ' -f1)
     if [ -z "$want" ]; then
-        [ "${ALLOW_UNPINNED:-}" = 1 ] || { echo "!! $var is not set in versions.sh ($file: $sum)" >&2; exit 1; }
+        [ "${ALLOW_UNPINNED:-}" = 1 ] || { echo "!! $var is not set in versions/ ($file: $sum)" >&2; exit 1; }
         echo "   $var=$sum   (unpinned)"
     elif [ "$sum" != "$want" ]; then
         echo "!! $file: sha256 $sum, expected $want ($var)" >&2; exit 1

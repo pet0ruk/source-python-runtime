@@ -7,10 +7,18 @@ published as GitHub release assets and pinned by checksum in the Source.Python r
 
 ## Releases
 
-A release is `<python version>-r<revision>`, e.g. `3.13.2-r1`. Every input is in
-[`versions.sh`](versions.sh) (versions and the sha256 of every source archive). Bump `REVISION` when
-anything changes without a Python version change; reset it to 1 for a new Python version. A
-published release is never replaced, so an existing pin always refers to the same files.
+A release is `<python version>-r<revision>`, e.g. `3.13.2-r1`. Several Python series are built side
+by side (say 3.13 and 3.15), each from its own file in [`versions/`](versions):
+
+- `versions/common.sh`: inputs shared by every series (the build image, OpenSSL, zlib, sqlite, ...,
+  Boost, the compiled packages), with the sha256 of every source archive.
+- `versions/<series>.sh`: `PYTHON`, `PYTHON_SHA256` and `REVISION` for that series, plus anything that
+  has to differ from `common.sh` (for a newer series typically Boost or package versions).
+
+Bump a series' `REVISION` when anything that goes into it changes without a Python version change
+(a change to `common.sh` affects every series); reset it to 1 for a new Python version. A published
+release is never replaced, so an existing pin always refers to the same files. Adding a series is
+adding a file.
 
 Assets are named after Python's wheel platform tags:
 
@@ -25,11 +33,13 @@ plus `SHA256SUMS`.
 ## Building
 
 ```bash
-./build-linux.sh [out]      # Docker; ~10 min. out/ gets the .tar.gz, .sha256, logs/ and src/
+./build-linux.sh 3.13 [out]   # Docker; ~10 min. out/ (default out/3.13) gets the .tar.gz,
+                              # .sha256, logs/ and src/
 ```
 
-The GitHub workflow builds on every pull request and on manual dispatch. Dispatching it on `main`
-with **release** set also publishes the release.
+The GitHub workflow builds every series on pull requests, and the series given (default all) on
+manual dispatch. Dispatching it on `main` with **release** set also publishes each built series
+whose release doesn't exist yet.
 
 ## Linux i686 bundle
 
