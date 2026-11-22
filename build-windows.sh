@@ -103,6 +103,9 @@ mkdir -p "$B/build/lib" "$B/build/include" "$R/plat-win" "$S" "$B/licenses"
 cp -r "$P/include" "$B/build/include/python$PYV"
 cp "$P/libs/python$PYN.lib" "$P/libs/python3.lib" "$B/build/lib/"
 cp "$W/$BOOSTN/stage/lib/$BOOST_LIB" "$B/build/lib/"
+# all of Boost's headers (header-only, so they match Boost.Python above by construction);
+# Source.Python uses other Boost libraries besides Boost.Python
+cp -r "$W/$BOOSTN/boost" "$B/build/include/"
 # runtime/: laid over the Source.Python tree. Lib/ minus what a server doesn't use, as on Linux.
 (cd "$P/Lib" && tar -c --exclude=__pycache__ --exclude='./test' --exclude='./idlelib' \
     --exclude='./tkinter' --exclude='./turtledemo' --exclude='./curses' --exclude='./site-packages' \
@@ -123,6 +126,7 @@ soabi=$SOABI
 libpython=python$PYN.dll
 python_lib=python$PYN.lib
 boost=$BOOST
+boost_include=build/include
 boost_python_lib=$BOOST_LIB
 toolset=$TOOLSET
 greenlet=$GREENLET
