@@ -141,8 +141,13 @@ cd "$W/boost_${BOOST//./_}"
 
 echo ">> wheels: greenlet $GREENLET, psycopg2 $PSYCOPG2, markupsafe $MARKUPSAFE, charset-normalizer $CHARSET_NORMALIZER"
 mkdir -p "$W/wheels" "$W/repaired" "$W/site"
-# CHARSET_NORMALIZER_USE_MYPYC: the mypyc-compiled build, as published on PyPI
-PATH=$DP/bin:$PATH CHARSET_NORMALIZER_USE_MYPYC=1 HOME=$W $PYBIN -m pip -q wheel --no-deps \
+# CHARSET_NORMALIZER_USE_MYPYC: the mypyc-compiled build, as published on PyPI.
+# LDFLAGS: libstdc++/libgcc linked statically and kept private, so the C++ ones (greenlet) don't
+# depend on the server's libstdc++: some games ship an old one in bin/ that srcds puts first on
+# the library path (L4D2: no CXXABI_1.3.7).
+PATH=$DP/bin:$PATH CHARSET_NORMALIZER_USE_MYPYC=1 HOME=$W \
+    LDFLAGS="-static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,-z,noexecstack" \
+    $PYBIN -m pip -q wheel --no-deps \
     --no-binary :all: -w "$W/wheels" "greenlet==$GREENLET" "psycopg2==$PSYCOPG2" \
     "markupsafe==$MARKUPSAFE" "charset-normalizer==$CHARSET_NORMALIZER" > "$L/wheels.log" 2>&1 \
     || { tail -30 "$L/wheels.log"; exit 1; }
@@ -209,11 +214,11 @@ echo ">> checks"
 # every shipped ELF: glibc <= 2.28, libstdc++ 8's symbol versions, no executable stack
 find "$B" -type f \( -name '*.so' -o -name '*.so.*' \) | sort | xargs python3 "$REPO/tools/symver.py" \
     --max-glibc 2.28 --max-glibcxx 3.4.25 > "$L/symver.txt" || { grep -B0 'limit\|EXECSTACK' "$L/symver.txt"; exit 1; }
-# only system libraries (or our own) may be NEEDED
+# only system libraries (or our own) may be NEEDED; not libstdc++/libgcc_s, which are linked in
 find "$B" -type f \( -name '*.so' -o -name '*.so.*' \) | sort | while read -r f; do
     readelf -dW "$f" | awk -v f="${f#"$B"/}" '/NEEDED/ {gsub(/[][]/, "", $5); print f, $5}'
 done > "$L/needed.txt"
-if grep -vE ' (libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libutil\.so\.1|ld-linux\.so\.2|libgcc_s\.so\.1|libstdc\+\+\.so\.6|libpython[0-9.]+\.so\.1\.0|lib(pq|ssl|crypto)-[0-9a-f]+\.so[.0-9]*)$' "$L/needed.txt"; then
+if grep -vE ' (libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libutil\.so\.1|ld-linux\.so\.2|libpython[0-9.]+\.so\.1\.0|lib(pq|ssl|crypto)-[0-9a-f]+\.so[.0-9]*)$' "$L/needed.txt"; then
     echo "!! unexpected NEEDED libraries (above)" >&2; exit 1
 fi
 # the shipped runtime imports its native modules and packages from the bundle alone

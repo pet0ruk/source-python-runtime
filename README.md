@@ -51,13 +51,15 @@ Built in `manylinux_2_28_i686` (AlmaLinux 8, glibc 2.28):
   extension modules with their symbols hidden, so the server needs none of them installed and an
   older copy already loaded by the server can't be bound instead.
 - **greenlet, psycopg2, markupsafe, charset-normalizer** built from source as wheels and repaired
-  with auditwheel (psycopg2 carries a minimal libpq and its own OpenSSL, like `psycopg2-binary`).
+  with auditwheel (psycopg2 carries a minimal libpq and its own OpenSSL, like `psycopg2-binary`),
+  with libstdc++/libgcc linked statically: some games ship an old libstdc++ that the server loads
+  first (L4D2).
 - **Boost.Python**, built against this interpreter with the system GCC 8. It is a static library
   that Source.Python links with its own compiler; GCC 8's objects need only libstdc++ 8.
 
 Checks run at the end of every build: every shipped ELF needs at most glibc 2.28 and libstdc++ 8's
 symbol versions and has no executable stack (`tools/symver.py`); only system libraries are
-`NEEDED`; the runtime imports its native modules and packages from the bundle alone.
+`NEEDED` (not libstdc++ or libgcc_s); the runtime imports its native modules and packages from the bundle alone.
 
 Not built: `_tkinter`, `_curses`, `readline`, `_dbm`/`_gdbm`, `_uuid` (their system libraries
 differ between distributions and a server doesn't need them; `uuid` falls back to pure Python),
