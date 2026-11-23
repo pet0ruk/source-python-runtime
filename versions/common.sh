@@ -24,8 +24,8 @@ SQLITE_YEAR=2025
 SQLITE_SHA256=a3db587a1b92ee5ddac2f66b3edb41b26f9c867275782d46c3a088977d6a5b18
 POSTGRESQL=17.6
 POSTGRESQL_SHA256=e0630a3600aea27511715563259ec2111cd5f4353a4b040e0be827f94cd7a8b0
-BOOST=1.87.0
-BOOST_SHA256=f55c340aa49763b1925ccf02b2e83f35fdcf634c9d5164a2acb87540173c741d
+BOOST=1.92.0
+BOOST_SHA256=c4a3b310ddd2472416e091067166b0713be97c63f38c212c484ada022fd296ce
 
 # Compiled packages Source.Python vendors; versions must match the requirements.txt in its
 # addons/source-python/packages/site-packages for the Source.Python branch pinning the release.

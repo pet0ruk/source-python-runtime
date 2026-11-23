@@ -78,8 +78,12 @@ PW=$(cygpath -m "$P")
 echo "using python : $PYV : $PW/python.exe : $PW/include : $PW/libs ;" > user-config.jam
 ./b2.exe --user-config=user-config.jam -j"${JOBS:-$(nproc)}" -q toolset=$TOOLSET address-model=32 \
     architecture=x86 link=static runtime-link=static threading=multi variant=release \
-    python="$PYV" --with-python stage > "$L/boost.log" 2>&1 || { tail -40 "$L/boost.log"; exit 1; }
-BOOST_LIB=$(cd stage/lib && ls libboost_python$PYN-vc143-mt-s-x32-$BOOST_TAG.lib)
+    python="$PYV" libs/python/build//boost_python > "$L/boost.log" 2>&1 \
+    || { tail -40 "$L/boost.log"; exit 1; }
+# Only that target, as on Linux (`--with-python stage` also builds what Boost.Python's tests need).
+BOOST_LIB=libboost_python$PYN-vc143-mt-s-x32-$BOOST_TAG.lib
+BOOST_PY_LIB=$(find "$PWD/bin.v2/libs/python" -name "$BOOST_LIB")
+[ "$(wc -l <<<"$BOOST_PY_LIB")" = 1 ] && [ -f "$BOOST_PY_LIB" ] || { echo "!! $BOOST_LIB: $BOOST_PY_LIB" >&2; exit 1; }
 cd "$HERE"
 
 echo ">> wheels: greenlet $GREENLET (source), markupsafe $MARKUPSAFE, charset-normalizer $CHARSET_NORMALIZER, sqlalchemy $SQLALCHEMY"
@@ -102,7 +106,7 @@ mkdir -p "$B/build/lib" "$B/build/include" "$R/plat-win" "$S" "$B/licenses"
 # build/: what compiling Source.Python needs
 cp -r "$P/include" "$B/build/include/python$PYV"
 cp "$P/libs/python$PYN.lib" "$P/libs/python3.lib" "$B/build/lib/"
-cp "$W/$BOOSTN/stage/lib/$BOOST_LIB" "$B/build/lib/"
+cp "$BOOST_PY_LIB" "$B/build/lib/"
 # all of Boost's headers (header-only, so they match Boost.Python above by construction);
 # Source.Python uses other Boost libraries besides Boost.Python
 cp -r "$W/$BOOSTN/boost" "$B/build/include/"

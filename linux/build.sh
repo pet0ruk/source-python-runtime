@@ -136,8 +136,13 @@ cd "$W/boost_${BOOST//./_}"
 ./b2 --user-config=user-config.jam -j"$JOBS" -q toolset=gcc address-model=32 architecture=x86 \
     link=static runtime-link=shared threading=multi variant=release visibility=hidden \
     cxxflags="-m32 -fPIC" cflags="-m32 -fPIC" linkflags=-m32 \
-    python="$PYV" --with-python stage > "$L/boost.log" 2>&1 || { tail -40 "$L/boost.log"; exit 1; }
-{ strings -a "stage/lib/libboost_python$PYN.a" | grep '^GCC: ' | sort -u; } || true
+    python="$PYV" libs/python/build//boost_python > "$L/boost.log" 2>&1 \
+    || { tail -40 "$L/boost.log"; exit 1; }
+# Only that target: `--with-python stage` also builds what Boost.Python's tests need (Boost.Math,
+# Container, Serialization, ... since Boost's modular build), and GCC 8 crashes on Boost.Math.
+BOOST_PY_A=$(find "$PWD/bin.v2/libs/python" -name "libboost_python$PYN.a")
+[ "$(wc -l <<<"$BOOST_PY_A")" = 1 ] && [ -f "$BOOST_PY_A" ] || { echo "!! libboost_python$PYN.a: $BOOST_PY_A" >&2; exit 1; }
+{ strings -a "$BOOST_PY_A" | grep '^GCC: ' | sort -u; } || true
 
 echo ">> wheels: greenlet $GREENLET, psycopg2 $PSYCOPG2, markupsafe $MARKUPSAFE, charset-normalizer $CHARSET_NORMALIZER, sqlalchemy $SQLALCHEMY"
 mkdir -p "$W/wheels" "$W/repaired" "$W/site"
@@ -165,7 +170,7 @@ mkdir -p "$B/build/lib" "$B/build/include" "$R/plat-linux" "$S" "$B/licenses"
 # build/: what compiling Source.Python needs
 cp -a "$P/include/python$PYV" "$B/build/include/"
 cp -L "$P/lib/libpython$PYV.so.1.0" "$P/lib/python$PYV/config-$PYV-i386-linux-gnu/libpython$PYV.a" "$B/build/lib/"
-cp "$W/boost_${BOOST//./_}/stage/lib/libboost_python$PYN.a" "$B/build/lib/"
+cp "$BOOST_PY_A" "$B/build/lib/"
 # all of Boost's headers (header-only, so they match Boost.Python above by construction);
 # Source.Python uses other Boost libraries besides Boost.Python
 cp -a "$W/boost_${BOOST//./_}/boost" "$B/build/include/"
