@@ -1,9 +1,11 @@
 #!/bin/bash
-# Builds the Linux i686 runtime bundle. Runs inside the manylinux image (see ../build-linux.sh):
+# Builds the Linux runtime bundle for ARCH (i686, the default, or x86_64). Runs inside the
+# manylinux image for that architecture (see ../build-linux.sh):
 #
-#   linux/build.sh <repo dir> <series> <out dir>
+#   [ARCH=...] linux/build.sh <repo dir> <series> <out dir>
 #
-# - CPython is configured for i686 (SOABI cpython-3XX-i386-linux-gnu) with --enable-shared.
+# - CPython is configured for the image's architecture (SOABI cpython-3XX-i386-linux-gnu or
+#   cpython-3XX-x86_64-linux-gnu) with --enable-shared.
 # - OpenSSL, libffi, zlib, bzip2, xz and sqlite are built from source as static PIC archives and
 #   linked into the extension modules, so the server needs none of them installed.
 #   -Wl,--exclude-libs,ALL keeps their symbols private: srcds can already have an older system copy
@@ -24,14 +26,24 @@ OUT=$(realpath -m "${3:?out dir}")
 # shellcheck source=../versions/3.13.sh
 . "$REPO/versions/$SERIES.sh"
 case $PYTHON in "$SERIES".*) ;; *) echo "!! versions/$SERIES.sh sets PYTHON=$PYTHON" >&2; exit 2;; esac
-PLATFORM=manylinux_2_28_i686
+ARCH=${ARCH:-i686}
+PLATFORM=manylinux_2_28_$ARCH
+# per architecture: OpenSSL's Configure target, CPython's multiarch triplet, Boost's address-model,
+# the dynamic loader's name
+case $ARCH in
+    i686) OSSL_TARGET=linux-x86 TRIPLET=i386-linux-gnu ADDRESS_MODEL=32 LDSO='ld-linux\.so\.2' ;;
+    x86_64) OSSL_TARGET=linux-x86_64 TRIPLET=x86_64-linux-gnu ADDRESS_MODEL=64 LDSO='ld-linux-x86-64\.so\.2' ;;
+    *) echo "!! ARCH must be i686 or x86_64, not $ARCH" >&2; exit 2 ;;
+esac
+[ "$(uname -m)" = "$ARCH" ] || { echo "!! ARCH=$ARCH, but this image is $(uname -m)" >&2; exit 2; }
+M="-m$ADDRESS_MODEL"
 PYV=${PYTHON%.*}                       # 3.13
 PYN=${PYV/./}                          # 313
 RELEASE=$PYTHON-r$REVISION
 NAME=sp-python-$RELEASE-$PLATFORM
 JOBS=${JOBS:-$(nproc)}
 
-SRC=$OUT/src L=$OUT/logs B=$OUT/$NAME
+SRC=$OUT/src L=$OUT/logs/$ARCH B=$OUT/$NAME
 D=/tmp/deps DP=/tmp/pq P=/tmp/python W=/tmp/w
 rm -rf "$B" "$L" "$D" "$DP" "$P" "$W"
 mkdir -p "$SRC" "$L" "$D" "$W"
@@ -67,12 +79,12 @@ fetch "https://archives.boost.io/release/$BOOST/source/boost_${BOOST//./_}.tar.g
 
 echo ">> openssl $OPENSSL"
 # openssldir /etc/ssl: CA lookup in /etc/ssl/certs (Debian/Ubuntu/Arch); SSL_CERT_FILE/DIR override.
-(cd "openssl-$OPENSSL" && ./Configure linux-x86 no-shared no-tests no-docs -fPIC --prefix=$D \
+(cd "openssl-$OPENSSL" && ./Configure $OSSL_TARGET no-shared no-tests no-docs -fPIC --prefix=$D \
     --libdir=lib --openssldir=/etc/ssl && make -j"$JOBS" && make install_sw) > "$L/openssl.log" 2>&1
 # A second, shared OpenSSL for libpq only: libpq's build rejects a static libcrypto (it contains
 # pthread_exit). auditwheel vendors these .so files into psycopg2's wheel.
 mkdir -p "$W/ossl-shared" && tar -C "$W/ossl-shared" -xf "$SRC/openssl-$OPENSSL.tar.gz"
-(cd "$W/ossl-shared/openssl-$OPENSSL" && ./Configure linux-x86 shared no-tests no-docs --prefix=$DP \
+(cd "$W/ossl-shared/openssl-$OPENSSL" && ./Configure $OSSL_TARGET shared no-tests no-docs --prefix=$DP \
     --libdir=lib --openssldir=/etc/ssl && make -j"$JOBS" && make install_sw) > "$L/openssl-shared.log" 2>&1
 echo ">> libffi $LIBFFI"
 (cd "libffi-$LIBFFI" && ./configure --prefix=$D --libdir=$D/lib --disable-shared --enable-static \
@@ -115,6 +127,7 @@ cd "$W/Python-$PYTHON"
 # glibc >= 2.39's i386 ___tls_get_addr saves and restores the extended register state
 # (xsavec/xrstor) on every call: that made Python 5-10x slower in srcds on current distributions.
 # The TLS block (16 bytes) comes from the static TLS that glibc reserves for dlopen()ed libraries.
+# The same model is used on x86_64, where __tls_get_addr is cheaper but still a call per access.
 ./configure --enable-shared --prefix=$P --with-ensurepip=install --with-openssl=$D \
     PKG_CONFIG="pkg-config --static" CPPFLAGS="-I$D/include" CFLAGS_NODIST="-ftls-model=initial-exec" \
     LDFLAGS="-L$D/lib -Wl,-z,noexecstack -Wl,--exclude-libs,ALL" \
@@ -125,8 +138,9 @@ make -j"$JOBS" > "$L/make.log" 2>&1 || { tail -50 "$L/make.log"; exit 1; }
 grep -E -A6 'necessary bits|failed to build|Failed to build' "$L/make.log" || true
 make install > "$L/install.log" 2>&1
 # The initial-exec model must have reached libpython: no ___tls_get_addr calls, and STATIC_TLS set.
-calls=$(objdump -d "$P/lib/libpython$PYV.so.1.0" | grep -c '___tls_get_addr' || true)
-[ "$calls" = 0 ] || { echo "!! libpython calls ___tls_get_addr $calls times" >&2; exit 1; }
+# (i386: ___tls_get_addr, x86_64: __tls_get_addr)
+calls=$(objdump -d "$P/lib/libpython$PYV.so.1.0" | grep -c '__tls_get_addr' || true)
+[ "$calls" = 0 ] || { echo "!! libpython calls __tls_get_addr $calls times" >&2; exit 1; }
 readelf -d "$P/lib/libpython$PYV.so.1.0" | grep -q STATIC_TLS || { echo "!! libpython: no STATIC_TLS flag" >&2; exit 1; }
 PYBIN=$P/bin/python$PYV
 export LD_LIBRARY_PATH=$P/lib
@@ -144,9 +158,9 @@ cd "$W/boost_${BOOST//./_}"
 # Boost.Python only needs the headers; nothing is executed when the include and lib dirs are given.
 { echo "using gcc : : /usr/bin/g++ ;"
   echo "using python : $PYV : /usr/bin/false : $P/include/python$PYV : $P/lib ;"; } > user-config.jam
-./b2 --user-config=user-config.jam -j"$JOBS" -q toolset=gcc address-model=32 architecture=x86 \
+./b2 --user-config=user-config.jam -j"$JOBS" -q toolset=gcc address-model=$ADDRESS_MODEL architecture=x86 \
     link=static runtime-link=shared threading=multi variant=release visibility=hidden \
-    cxxflags="-m32 -fPIC" cflags="-m32 -fPIC" linkflags=-m32 \
+    cxxflags="$M -fPIC" cflags="$M -fPIC" linkflags=$M \
     python="$PYV" libs/python/build//boost_python > "$L/boost.log" 2>&1 \
     || { tail -40 "$L/boost.log"; exit 1; }
 # Only that target: `--with-python stage` also builds what Boost.Python's tests need (Boost.Math,
@@ -180,7 +194,7 @@ S=$B/runtime/addons/source-python/packages/site-packages
 mkdir -p "$B/build/lib" "$B/build/include" "$R/plat-linux" "$S" "$B/licenses"
 # build/: what compiling Source.Python needs
 cp -a "$P/include/python$PYV" "$B/build/include/"
-cp -L "$P/lib/libpython$PYV.so.1.0" "$P/lib/python$PYV/config-$PYV-i386-linux-gnu/libpython$PYV.a" "$B/build/lib/"
+cp -L "$P/lib/libpython$PYV.so.1.0" "$P/lib/python$PYV/config-$PYV-$TRIPLET/libpython$PYV.a" "$B/build/lib/"
 cp "$BOOST_PY_A" "$B/build/lib/"
 # all of Boost's headers (header-only, so they match Boost.Python above by construction);
 # Source.Python uses other Boost libraries besides Boost.Python
@@ -192,7 +206,7 @@ cp -a "$W/boost_${BOOST//./_}/boost" "$B/build/include/"
     --exclude="./config-$PYV-*" --exclude='./lib-dynload' --exclude='./_sysconfigdata_*' .) | tar -x -C "$R"
 cp -a "$P/lib/python$PYV/lib-dynload" "$R/"
 rm -f "$R"/lib-dynload/*_test*.so "$R"/lib-dynload/xx*.so
-cp "$P/lib/python$PYV/_sysconfigdata__linux_i386-linux-gnu.py" "$S/"
+cp "$P/lib/python$PYV/_sysconfigdata__linux_$TRIPLET.py" "$S/"
 cp -L "$P/lib/libpython$PYV.so.1.0" "$R/plat-linux/"
 cp -L /tmp/sqlite-so/lib/libsqlite3.so.0 "$R/plat-linux/"
 cp -a "$W"/site/{greenlet,psycopg2,markupsafe,charset_normalizer,sqlalchemy} "$S/"
@@ -241,7 +255,7 @@ find "$B" -type f \( -name '*.so' -o -name '*.so.*' \) | sort | xargs python3 "$
 find "$B" -type f \( -name '*.so' -o -name '*.so.*' \) | sort | while read -r f; do
     readelf -dW "$f" | awk -v f="${f#"$B"/}" '/NEEDED/ {gsub(/[][]/, "", $5); print f, $5}'
 done > "$L/needed.txt"
-if grep -vE ' (libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libutil\.so\.1|ld-linux\.so\.2|libpython[0-9.]+\.so\.1\.0|lib(pq|ssl|crypto)-[0-9a-f]+\.so[.0-9]*)$' "$L/needed.txt"; then
+if grep -vE " (libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libutil\.so\.1|$LDSO|libpython[0-9.]+\.so\.1\.0|lib(pq|ssl|crypto)-[0-9a-f]+\.so[.0-9]*)\$" "$L/needed.txt"; then
     echo "!! unexpected NEEDED libraries (above)" >&2; exit 1
 fi
 # the shipped runtime imports its native modules and packages from the bundle alone

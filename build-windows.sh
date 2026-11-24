@@ -1,20 +1,21 @@
 #!/bin/bash
-# Builds the Windows (win32) runtime bundle of one Python series and packs it. Runs in Git Bash on
-# Windows (CI: windows-2022) and needs Visual Studio with the C++ desktop workload (v143) and any
-# Python 3 (only to unpack the CPython package; everything else runs with that interpreter).
+# Builds the Windows runtime bundle of one Python series and packs it. Runs in Git Bash on Windows
+# (CI: windows-2022) and needs Visual Studio with the C++ desktop workload (v143) and any Python 3
+# (only to unpack the CPython package; everything else runs with that interpreter).
 #
-#   ./build-windows.sh <series> [out dir]        e.g. ./build-windows.sh 3.13   (default ./out/<series>)
+#   [ARCH=win32|win_amd64] ./build-windows.sh <series> [out dir]   e.g. ./build-windows.sh 3.13
+#                                                                  (default ARCH win32, out ./out/<series>)
 #
-# Produces <out>/sp-python-<release>-win32.zip (+ .sha256) and <out>/logs/.
+# Produces <out>/sp-python-<release>-<ARCH>.zip (+ .sha256) and <out>/logs/<ARCH>/.
 #
-# - CPython is the official 32-bit build (NuGet package pythonx86, sha256 pinned in the series
-#   file): python313.dll, its DLLs/ (.pyd extension modules, OpenSSL, libffi, sqlite), the
-#   stdlib, headers and import libraries. Nothing of CPython is compiled here.
+# - CPython is the official build (NuGet package pythonx86 for win32, python for win_amd64, sha256
+#   pinned in the series file): python313.dll, its DLLs/ (.pyd extension modules, OpenSSL, libffi,
+#   sqlite), the stdlib, headers and import libraries. Nothing of CPython is compiled here.
 # - Boost.Python is built against it with MSVC, statically and with the static C runtime
 #   (runtime-link=static, i.e. /MT, as Source.Python's Windows build links), using the oldest
 #   supported toolset (v143, Visual Studio 2022): newer MSVC versions link v143 libraries, not
 #   the other way round.
-# - markupsafe, charset-normalizer and sqlalchemy come from their official win32 wheels;
+# - markupsafe, charset-normalizer and sqlalchemy come from their official wheels;
 #   greenlet has none and is built from source. psycopg2 isn't shipped on Windows.
 # - As on Linux, the stdlib is shipped without the parts a server doesn't use (test, idlelib,
 #   tkinter, turtledemo, ...); the package already omits Tcl/Tk and CPython's test modules.
@@ -26,7 +27,13 @@ OUT=$(realpath -m "${2:-$HERE/out/$SERIES}")
 # shellcheck source=versions/3.13.sh
 . "$HERE/versions/$SERIES.sh"
 case $PYTHON in "$SERIES".*) ;; *) echo "!! versions/$SERIES.sh sets PYTHON=$PYTHON" >&2; exit 2;; esac
-PLATFORM=win32
+PLATFORM=${ARCH:-win32}
+# per architecture: the NuGet package and its pinned sha256, Boost's address-model and library tag
+case $PLATFORM in
+    win32) NUGET=pythonx86 NUGET_SHA256_VAR=PYTHON_WIN32_SHA256 ADDRESS_MODEL=32 ;;
+    win_amd64) NUGET=python NUGET_SHA256_VAR=PYTHON_WIN_AMD64_SHA256 ADDRESS_MODEL=64 ;;
+    *) echo "!! ARCH must be win32 or win_amd64, not $PLATFORM" >&2; exit 2 ;;
+esac
 PYV=${PYTHON%.*}                       # 3.13
 PYN=${PYV/./}                          # 313
 RELEASE=$PYTHON-r$REVISION
@@ -35,7 +42,7 @@ BOOSTN=boost_${BOOST//./_}
 BOOST_TAG=${BOOST%.*}; BOOST_TAG=${BOOST_TAG/./_}      # 1_87
 TOOLSET=msvc-14.3
 
-SRC=$OUT/src L=$OUT/logs B=$OUT/$NAME W=$OUT/work
+SRC=$OUT/src L=$OUT/logs/$PLATFORM B=$OUT/$NAME W=$OUT/work-$PLATFORM
 rm -rf "$B" "$L" "$W" "$OUT/$NAME.zip" "$OUT/$NAME.zip.sha256"
 mkdir -p "$SRC" "$L" "$W"
 
@@ -54,21 +61,24 @@ fetch() {   # fetch <url> <file> <sha256 var name>
     fi
 }
 echo ">> sources"
-fetch "https://api.nuget.org/v3-flatcontainer/pythonx86/$PYTHON/pythonx86.$PYTHON.nupkg" "pythonx86.$PYTHON.nupkg" PYTHON_WIN32_SHA256
+fetch "https://api.nuget.org/v3-flatcontainer/$NUGET/$PYTHON/$NUGET.$PYTHON.nupkg" "$NUGET.$PYTHON.nupkg" "$NUGET_SHA256_VAR"
 fetch "https://archives.boost.io/release/$BOOST/source/$BOOSTN.tar.gz" "$BOOSTN.tar.gz" BOOST_SHA256
 
-echo ">> python $PYTHON (pythonx86)"
+echo ">> python $PYTHON ($NUGET)"
 P=$W/python
 mkdir -p "$P"
 # unzip with any Python on the runner (the package itself is a zip)
 PY_HOST=$(command -v python3 || command -v python)
 "$PY_HOST" -I -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
-    "$SRC/pythonx86.$PYTHON.nupkg" "$W/nupkg"
+    "$SRC/$NUGET.$PYTHON.nupkg" "$W/nupkg"
 mv "$W/nupkg/tools"/* "$P/"
 PYBIN=$P/python.exe
 "$PYBIN" -c 'import sys, ssl, sqlite3, ctypes, sysconfig
 print(sys.version); print(ssl.OPENSSL_VERSION, "| sqlite", sqlite3.sqlite_version, "|", sysconfig.get_platform())'
-SOABI=$("$PYBIN" -c 'import sysconfig; print(sysconfig.get_config_var("SOABI") or "cp" + sysconfig.get_config_var("py_version_nodot") + "-win32")')
+# the interpreter must be the architecture asked for (sysconfig: win32 / win-amd64)
+[ "$("$PYBIN" -c 'import sysconfig; print(sysconfig.get_platform().replace("-", "_"))')" = "$PLATFORM" ] \
+    || { echo "!! $NUGET is not a $PLATFORM interpreter" >&2; exit 1; }
+SOABI=$("$PYBIN" -c 'import sys, sysconfig; print(sysconfig.get_config_var("SOABI") or "cp" + sysconfig.get_config_var("py_version_nodot") + "-" + sys.argv[1])' "$PLATFORM")
 
 echo ">> boost.python $BOOST ($TOOLSET)"
 tar -C "$W" -xzf "$SRC/$BOOSTN.tar.gz"
@@ -76,12 +86,12 @@ cd "$W/$BOOSTN"
 cmd //c bootstrap.bat > "$L/boost-bootstrap.log" 2>&1 || { tail -30 "$L/boost-bootstrap.log"; exit 1; }
 PW=$(cygpath -m "$P")
 echo "using python : $PYV : $PW/python.exe : $PW/include : $PW/libs ;" > user-config.jam
-./b2.exe --user-config=user-config.jam -j"${JOBS:-$(nproc)}" -q toolset=$TOOLSET address-model=32 \
+./b2.exe --user-config=user-config.jam -j"${JOBS:-$(nproc)}" -q toolset=$TOOLSET address-model=$ADDRESS_MODEL \
     architecture=x86 link=static runtime-link=static threading=multi variant=release \
     python="$PYV" libs/python/build//boost_python > "$L/boost.log" 2>&1 \
     || { tail -40 "$L/boost.log"; exit 1; }
 # Only that target, as on Linux (`--with-python stage` also builds what Boost.Python's tests need).
-BOOST_LIB=libboost_python$PYN-vc143-mt-s-x32-$BOOST_TAG.lib
+BOOST_LIB=libboost_python$PYN-vc143-mt-s-x$ADDRESS_MODEL-$BOOST_TAG.lib
 BOOST_PY_LIB=$(find "$PWD/bin.v2/libs/python" -name "$BOOST_LIB")
 [ "$(wc -l <<<"$BOOST_PY_LIB")" = 1 ] && [ -f "$BOOST_PY_LIB" ] || { echo "!! $BOOST_LIB: $BOOST_PY_LIB" >&2; exit 1; }
 cd "$HERE"
@@ -95,7 +105,7 @@ mkdir -p "$WH" "$SITE"
 "$PYBIN" -m pip -q wheel --no-deps --no-binary :all: -w "$WH" "greenlet==$GREENLET" \
     >> "$L/wheels.log" 2>&1 || { tail -30 "$L/wheels.log"; exit 1; }
 for w in "$WH"/*.whl; do
-    case $w in *-cp$PYN-cp$PYN-win32.whl) ;; *) echo "!! not a cp$PYN win32 wheel: $w" >&2; exit 1;; esac
+    case $w in *-cp$PYN-cp$PYN-$PLATFORM.whl) ;; *) echo "!! not a cp$PYN $PLATFORM wheel: $w" >&2; exit 1;; esac
     "$PYBIN" -m zipfile -e "$w" "$SITE"
 done
 
@@ -116,6 +126,8 @@ cp -r "$W/$BOOSTN/boost" "$B/build/include/"
     --exclude='./ensurepip/_bundled' .) | tar -x -C "$R"
 cp "$P"/DLLs/*.pyd "$P"/DLLs/*.dll "$R/plat-win/"
 cp "$P/python$PYN.dll" "$P/python3.dll" "$P/vcruntime140.dll" "$R/plat-win/"
+# x64 builds also need vcruntime140_1.dll (C++ exception handling)
+[ "$PLATFORM" = win32 ] || cp "$P/vcruntime140_1.dll" "$R/plat-win/"
 cp -r "$SITE"/{greenlet,markupsafe,charset_normalizer,sqlalchemy} "$S/"
 rm -rf "$S/greenlet/tests"
 cp "$P/LICENSE.txt" "$B/licenses/cpython.txt"

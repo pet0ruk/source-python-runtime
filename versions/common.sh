@@ -7,7 +7,9 @@
 # in each series file that should be re-released. sha256 sums are checked after download.
 
 # Linux build environment: manylinux_2_28 (AlmaLinux 8, glibc 2.28, GCC 14 from gcc-toolset)
+# (tag 2026.11.14-1 of both)
 MANYLINUX_I686=quay.io/pypa/manylinux_2_28_i686@sha256:baf927c001d9dfead35e53de68b2c113b623155b7a878cc45e2e1ad61c9fb5e7
+MANYLINUX_X86_64=quay.io/pypa/manylinux_2_28_x86_64@sha256:d086f64cddcace250ef0f0073583c51b8298159303290a730c9f59bd91edfd2c
 
 OPENSSL=3.5.4
 OPENSSL_SHA256=967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99
