@@ -1,4 +1,5 @@
-# Builds the runtime bundles, one job per Python series (versions/<series>.sh) and platform.
+# Builds the runtime bundles, one job per Python series (versions/<series>.sh), platform and
+# architecture (Linux i686 and x86_64, Windows win32 and win_amd64).
 # Every run uploads them as workflow artifacts. Pull requests build every series. A manual run
 # builds the series given (default all); with "release" set, a run on main also publishes each
 # built series as the GitHub release <python>-r<revision>, skipping series whose release already
@@ -45,17 +46,19 @@ jobs:
             echo "::error::no versions/$SERIES.sh (have: $all)"; exit 1
           fi
 
-  linux-i686:
+  linux:
     needs: series
-    name: linux-i686 (${{ matrix.series }})
+    name: linux-${{ matrix.arch }} (${{ matrix.series }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         series: ${{ fromJSON(needs.series.outputs.list) }}
+        arch: [i686, x86_64]
     env:
       SERIES: ${{ matrix.series }}
+      ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v7 # v7.0.1
 
@@ -70,7 +73,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7 # v7.0.2
         with:
-          name: bundle-${{ matrix.series }}-linux-i686
+          name: bundle-${{ matrix.series }}-linux-${{ matrix.arch }}
           path: |
             out/${{ matrix.series }}/*.tar.gz
             out/${{ matrix.series }}/*.tar.gz.sha256
@@ -78,12 +81,12 @@ jobs:
       - uses: actions/upload-artifact@v7 # v7.0.2
         if: always()
         with:
-          name: logs-${{ matrix.series }}-linux-i686
+          name: logs-${{ matrix.series }}-linux-${{ matrix.arch }}
           path: out/${{ matrix.series }}/logs/
 
-  win32:
+  windows:
     needs: series
-    name: win32 (${{ matrix.series }})
+    name: ${{ matrix.arch }} (${{ matrix.series }})
     # the oldest supported MSVC toolset (v143), see build-windows.sh
     runs-on: windows-2022
     timeout-minutes: 60
@@ -91,11 +94,13 @@ jobs:
       fail-fast: false
       matrix:
         series: ${{ fromJSON(needs.series.outputs.list) }}
+        arch: [win32, win_amd64]
     defaults:
       run:
         shell: bash
     env:
       SERIES: ${{ matrix.series }}
+      ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v7 # v7.0.1
 
@@ -103,14 +108,14 @@ jobs:
         uses: actions/cache@v6 # v6.1.0
         with:
           path: out/${{ matrix.series }}/src
-          key: sources-win32-${{ matrix.series }}-${{ hashFiles('versions/common.sh', format('versions/{0}.sh', matrix.series)) }}
+          key: sources-${{ matrix.arch }}-${{ matrix.series }}-${{ hashFiles('versions/common.sh', format('versions/{0}.sh', matrix.series)) }}
 
       - name: Build
         run: ./build-windows.sh "$SERIES" "out/$SERIES"
 
       - uses: actions/upload-artifact@v7 # v7.0.2
         with:
-          name: bundle-${{ matrix.series }}-win32
+          name: bundle-${{ matrix.series }}-${{ matrix.arch }}
           path: |
             out/${{ matrix.series }}/*.zip
             out/${{ matrix.series }}/*.zip.sha256
@@ -118,11 +123,11 @@ jobs:
       - uses: actions/upload-artifact@v7 # v7.0.2
         if: always()
         with:
-          name: logs-${{ matrix.series }}-win32
+          name: logs-${{ matrix.series }}-${{ matrix.arch }}
           path: out/${{ matrix.series }}/logs/
 
   release:
-    needs: [series, linux-i686, win32]
+    needs: [series, linux, windows]
     if: github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main'
     name: release (${{ matrix.series }})
     runs-on: ubuntu-latest
