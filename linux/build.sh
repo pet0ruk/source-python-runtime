@@ -108,8 +108,15 @@ echo ">> libpq $POSTGRESQL (minimal: shared OpenSSL, no gssapi/ldap/readline/icu
 echo ">> cpython $PYTHON"
 cd "$W/Python-$PYTHON"
 # pkg-config --static so libcrypto's -ldl/-pthread come along with the static archives
+# CFLAGS_NODIST (used for Python itself and its lib-dynload modules, not recorded in sysconfig for
+# extensions built later): the initial-exec TLS model, so the interpreter reads its thread-local
+# state (_Py_tss_tstate, read on every allocation) directly instead of calling ___tls_get_addr.
+# libpython is dlopen()ed by the loader, where general-dynamic TLS costs a call per access, and
+# glibc >= 2.39's i386 ___tls_get_addr saves and restores the extended register state
+# (xsavec/xrstor) on every call: that made Python 5-10x slower in srcds on current distributions.
+# The TLS block (16 bytes) comes from the static TLS that glibc reserves for dlopen()ed libraries.
 ./configure --enable-shared --prefix=$P --with-ensurepip=install --with-openssl=$D \
-    PKG_CONFIG="pkg-config --static" CPPFLAGS="-I$D/include" \
+    PKG_CONFIG="pkg-config --static" CPPFLAGS="-I$D/include" CFLAGS_NODIST="-ftls-model=initial-exec" \
     LDFLAGS="-L$D/lib -Wl,-z,noexecstack -Wl,--exclude-libs,ALL" \
     py_cv_module__tkinter=n/a py_cv_module__curses=n/a py_cv_module__curses_panel=n/a \
     py_cv_module_readline=n/a py_cv_module__dbm=n/a py_cv_module__gdbm=n/a py_cv_module__uuid=n/a \
@@ -117,6 +124,10 @@ cd "$W/Python-$PYTHON"
 make -j"$JOBS" > "$L/make.log" 2>&1 || { tail -50 "$L/make.log"; exit 1; }
 grep -E -A6 'necessary bits|failed to build|Failed to build' "$L/make.log" || true
 make install > "$L/install.log" 2>&1
+# The initial-exec model must have reached libpython: no ___tls_get_addr calls, and STATIC_TLS set.
+calls=$(objdump -d "$P/lib/libpython$PYV.so.1.0" | grep -c '___tls_get_addr' || true)
+[ "$calls" = 0 ] || { echo "!! libpython calls ___tls_get_addr $calls times" >&2; exit 1; }
+readelf -d "$P/lib/libpython$PYV.so.1.0" | grep -q STATIC_TLS || { echo "!! libpython: no STATIC_TLS flag" >&2; exit 1; }
 PYBIN=$P/bin/python$PYV
 export LD_LIBRARY_PATH=$P/lib
 SOABI=$($PYBIN -c 'import sysconfig; print(sysconfig.get_config_var("SOABI"))')
