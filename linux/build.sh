@@ -171,12 +171,12 @@ BOOST_PY_A=$(find "$PWD/bin.v2/libs/python" -name "libboost_python$PYN.a")
 
 echo ">> wheels: greenlet $GREENLET, psycopg2 $PSYCOPG2, markupsafe $MARKUPSAFE, charset-normalizer $CHARSET_NORMALIZER, sqlalchemy $SQLALCHEMY"
 mkdir -p "$W/wheels" "$W/repaired" "$W/site"
-# CHARSET_NORMALIZER_USE_MYPYC: the mypyc-compiled build, as published on PyPI;
+# CHARSET_NORMALIZER_USE_CYTHON: the compiled (Cython, since 3.5) build, as published on PyPI;
 # REQUIRE_SQLALCHEMY_CEXT: fail instead of falling back to pure Python without its extensions.
 # LDFLAGS: libstdc++/libgcc linked statically and kept private, so the C++ ones (greenlet) don't
 # depend on the server's libstdc++: some games ship an old one in bin/ that srcds puts first on
 # the library path (L4D2: no CXXABI_1.3.7).
-PATH=$DP/bin:$PATH CHARSET_NORMALIZER_USE_MYPYC=1 REQUIRE_SQLALCHEMY_CEXT=1 HOME=$W \
+PATH=$DP/bin:$PATH CHARSET_NORMALIZER_USE_CYTHON=1 REQUIRE_SQLALCHEMY_CEXT=1 HOME=$W \
     LDFLAGS="-static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,-z,noexecstack" \
     $PYBIN -m pip -q wheel --no-deps \
     --no-binary :all: -w "$W/wheels" "greenlet==$GREENLET" "psycopg2==$PSYCOPG2" \
