@@ -16,7 +16,11 @@
 #   supported toolset (v143, Visual Studio 2022): newer MSVC versions link v143 libraries, not
 #   the other way round.
 # - markupsafe, charset-normalizer and sqlalchemy come from their official wheels;
-#   greenlet has none and is built from source. psycopg2 isn't shipped on Windows.
+#   greenlet has none and is built from source.
+# - psycopg2 is built from source against a minimal libpq (PostgreSQL's meson build, only libpq)
+#   that links CPython's own OpenSSL build; delvewheel vendors libpq.dll and those OpenSSL DLLs into
+#   the wheel under mangled names, as psycopg2's official wheels do (and auditwheel on Linux).
+#   Needs Strawberry Perl (on the CI image) for PostgreSQL's build.
 # - As on Linux, the stdlib is shipped without the parts a server doesn't use (test, idlelib,
 #   tkinter, turtledemo, ...); the package already omits Tcl/Tk and CPython's test modules.
 set -euo pipefail
@@ -63,6 +67,9 @@ fetch() {   # fetch <url> <file> <sha256 var name>
 echo ">> sources"
 fetch "https://api.nuget.org/v3-flatcontainer/$NUGET/$PYTHON/$NUGET.$PYTHON.nupkg" "$NUGET.$PYTHON.nupkg" "$NUGET_SHA256_VAR"
 fetch "https://archives.boost.io/release/$BOOST/source/$BOOSTN.tar.gz" "$BOOSTN.tar.gz" BOOST_SHA256
+fetch "https://ftp.postgresql.org/pub/source/v$POSTGRESQL/postgresql-$POSTGRESQL.tar.bz2" "postgresql-$POSTGRESQL.tar.bz2" POSTGRESQL_SHA256
+fetch "https://github.com/python/cpython-bin-deps/archive/refs/tags/openssl-bin-$CPYTHON_OPENSSL_BIN.tar.gz" "cpython-openssl-bin-$CPYTHON_OPENSSL_BIN.tar.gz" CPYTHON_OPENSSL_BIN_SHA256
+fetch "https://github.com/lexxmark/winflexbison/releases/download/v$WINFLEXBISON/win_flex_bison-$WINFLEXBISON.zip" "win_flex_bison-$WINFLEXBISON.zip" WINFLEXBISON_SHA256
 
 echo ">> python $PYTHON ($NUGET)"
 P=$W/python
@@ -109,6 +116,68 @@ for w in "$WH"/*.whl; do
     "$PYBIN" -m zipfile -e "$w" "$SITE"
 done
 
+echo ">> libpq $POSTGRESQL (minimal: CPython's OpenSSL $CPYTHON_OPENSSL_BIN, no gssapi/ldap/icu/zlib)"
+case $PLATFORM in win32) VCVARS_ARCH=x86 OSSL_ARCH=win32 ;; *) VCVARS_ARCH=amd64 OSSL_ARCH=amd64 ;; esac
+"$PYBIN" -I -m tarfile -e "$SRC/postgresql-$POSTGRESQL.tar.bz2" "$W"
+"$PYBIN" -I -m tarfile -e "$SRC/cpython-openssl-bin-$CPYTHON_OPENSSL_BIN.tar.gz" "$W"
+"$PYBIN" -I -m zipfile -e "$SRC/win_flex_bison-$WINFLEXBISON.zip" "$W/winflexbison"
+OSSL=$W/cpython-bin-deps-openssl-bin-$CPYTHON_OPENSSL_BIN/$OSSL_ARCH
+# libpq links exactly the OpenSSL that CPython's package ships
+for f in libssl-3.dll libcrypto-3.dll; do
+    cmp -s "$OSSL/$f" "$P/DLLs/$f" || { echo "!! $f of openssl-bin-$CPYTHON_OPENSSL_BIN differs from CPython $PYTHON's (CPYTHON_OPENSSL_BIN must follow PYTHON)" >&2; exit 1; }
+done
+"$PYBIN" -m pip -q install "meson==$MESON" "ninja==$NINJA" "delvewheel==$DELVEWHEEL" > "$L/tools.log" 2>&1 \
+    || { tail -30 "$L/tools.log"; exit 1; }
+PERL_EXE=/c/Strawberry/perl/bin/perl.exe
+[ -x "$PERL_EXE" ] || { echo "!! Strawberry Perl not found at $PERL_EXE" >&2; exit 1; }
+VS=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' \
+    -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | tr -d '\r')
+[ -n "$VS" ] || { echo "!! no Visual Studio with the C++ tools found" >&2; exit 1; }
+PG=$W/postgresql-$POSTGRESQL
+# cmd.exe in the Visual Studio environment for the target architecture; --auto-features=disabled
+# leaves out every optional dependency, then only OpenSSL is enabled; only the libpq target is built
+win() { cygpath -w "$1"; }
+printf '%s\r\n' '@echo off' \
+    "call \"$VS\\VC\\Auxiliary\\Build\\vcvarsall.bat\" $VCVARS_ARCH >nul || exit /b 1" \
+    "set PATH=$(win "$P/Scripts");%PATH%" \
+    "cd /d \"$(win "$PG")\" || exit /b 1" \
+    "meson setup build --buildtype=release --auto-features=disabled -Dssl=openssl -Dextra_include_dirs=\"$(win "$OSSL/include")\" -Dextra_lib_dirs=\"$(win "$OSSL")\" -DPERL=\"$(win "$PERL_EXE")\" -DFLEX=\"$(win "$W/winflexbison/win_flex.exe")\" -DBISON=\"$(win "$W/winflexbison/win_bison.exe")\" || exit /b 1" \
+    'meson compile -C build src/interfaces/libpq/libpq:shared_library || (meson introspect build --targets > build\targets.json & exit /b 1)' \
+    > "$W/libpq.bat"
+cmd //c "$(win "$W/libpq.bat")" > "$L/libpq.log" 2>&1 || { tail -40 "$L/libpq.log"; cp "$PG/build/meson-logs/meson-log.txt" "$L/" 2>/dev/null || true; exit 1; }
+cp "$PG/build/meson-logs/meson-log.txt" "$L/"
+PQLIB=$W/libpq/lib PQINC=$W/libpq/include
+mkdir -p "$PQLIB" "$PQINC/libpq"
+cp "$PG/build/src/interfaces/libpq/libpq.dll" "$PG/build/src/interfaces/libpq/libpq.lib" "$PQLIB/"
+cp "$PG/src/interfaces/libpq/libpq-fe.h" "$PG/src/interfaces/libpq/libpq-events.h" "$PG/src/include/postgres_ext.h" \
+    "$PG/build/src/include/pg_config.h" "$PG/build/src/include/pg_config_ext.h" "$PQINC/"
+cp "$PG/src/include/libpq/libpq-fs.h" "$PQINC/libpq/"
+# psycopg2's setup.py asks pg_config for these paths only; this stands in for it (as psycopg2's own
+# Windows wheel build does)
+printf '%s\r\n' '@echo off' \
+    "if \"%1\"==\"--libdir\" (echo $(win "$PQLIB")& exit /b 0)" \
+    "if \"%1\"==\"--includedir\" (echo $(win "$PQINC")& exit /b 0)" \
+    "if \"%1\"==\"--includedir-server\" (echo $(win "$PQINC")& exit /b 0)" \
+    "if \"%1\"==\"--version\" (echo PostgreSQL $POSTGRESQL& exit /b 0)" \
+    'if "%1"=="--ldflags" (echo.& exit /b 0)' \
+    'if "%1"=="--cppflags" (echo.& exit /b 0)' \
+    'exit /b 1' > "$W/libpq/pg_config.bat"
+
+echo ">> psycopg2 $PSYCOPG2 (source)"
+"$PYBIN" -m pip -q download --no-deps --no-binary :all: -d "$W/psycopg2-sdist" "psycopg2==$PSYCOPG2" > "$L/psycopg2.log" 2>&1 \
+    || { tail -30 "$L/psycopg2.log"; exit 1; }
+"$PYBIN" -I -m tarfile -e "$W/psycopg2-sdist/psycopg2-$PSYCOPG2.tar.gz" "$W/psycopg2-sdist"
+PSRC=$W/psycopg2-sdist/psycopg2-$PSYCOPG2
+sed -i "s|^pg_config *=.*|pg_config = $(win "$W/libpq/pg_config.bat" | sed 's/\\/\\\\/g')|" "$PSRC/setup.cfg"
+grep -q '^pg_config = .*pg_config.bat' "$PSRC/setup.cfg" || { echo "!! setup.cfg: pg_config not set" >&2; exit 1; }
+"$PYBIN" -m pip -q wheel --no-deps -w "$W/psycopg2-wheel" "$(win "$PSRC")" >> "$L/psycopg2.log" 2>&1 \
+    || { tail -30 "$L/psycopg2.log"; exit 1; }
+"$PYBIN" -m delvewheel repair --add-path "$(win "$PQLIB");$(win "$OSSL")" -w "$(win "$WH")" \
+    "$(win "$(ls "$W"/psycopg2-wheel/psycopg2-*.whl)")" >> "$L/psycopg2.log" 2>&1 \
+    || { tail -30 "$L/psycopg2.log"; exit 1; }
+"$PYBIN" -m zipfile -e "$(ls "$WH"/psycopg2-*.whl)" "$SITE"
+ls "$SITE"/psycopg2.libs
+
 echo ">> bundle $NAME"
 R=$B/runtime/addons/source-python/Python3
 S=$B/runtime/addons/source-python/packages/site-packages
@@ -128,10 +197,12 @@ cp "$P"/DLLs/*.pyd "$P"/DLLs/*.dll "$R/plat-win/"
 cp "$P/python$PYN.dll" "$P/python3.dll" "$P/vcruntime140.dll" "$R/plat-win/"
 # x64 builds also need vcruntime140_1.dll (C++ exception handling)
 [ "$PLATFORM" = win32 ] || cp "$P/vcruntime140_1.dll" "$R/plat-win/"
-cp -r "$SITE"/{greenlet,markupsafe,charset_normalizer,sqlalchemy} "$S/"
+cp -r "$SITE"/{greenlet,psycopg2,psycopg2.libs,markupsafe,charset_normalizer,sqlalchemy} "$S/"
 rm -rf "$S/greenlet/tests"
 cp "$P/LICENSE.txt" "$B/licenses/cpython.txt"
 cp "$W/$BOOSTN/LICENSE_1_0.txt" "$B/licenses/boost.txt"
+cp "$PG/COPYRIGHT" "$B/licenses/postgresql.txt"
+cp "$OSSL/LICENSE.txt" "$B/licenses/openssl.txt"
 
 cat > "$B/manifest.txt" <<EOF
 release=$RELEASE
@@ -145,29 +216,33 @@ boost=$BOOST
 boost_include=build/include
 boost_python_lib=$BOOST_LIB
 toolset=$TOOLSET
+openssl=$CPYTHON_OPENSSL_BIN
+postgresql=$POSTGRESQL
 greenlet=$GREENLET
 markupsafe=$MARKUPSAFE
 charset_normalizer=$CHARSET_NORMALIZER
 sqlalchemy=$SQLALCHEMY
+psycopg2=$PSYCOPG2
 EOF
 
 echo ">> checks"
 # the shipped runtime imports its native modules and packages from the bundle alone (test-only:
 # sqlalchemy imports typing_extensions, which Source.Python vendors as pure Python)
-"$PYBIN" -m pip -q install --no-deps --target "$W/testdeps" typing_extensions==4.13.2 > "$L/testdeps.log" 2>&1
+"$PYBIN" -m pip -q install --no-deps --target "$W/testdeps" typing_extensions==$TYPING_EXTENSIONS > "$L/testdeps.log" 2>&1
 "$PYBIN" -I -S -B -c '
 import os, sys
 b = sys.argv[1]
 r = os.path.join(b, "runtime", "addons", "source-python", "Python3")
 sys.path[:] = [r, os.path.join(r, "plat-win"), os.path.join(b, "runtime", "addons", "source-python", "packages", "site-packages"), sys.argv[2]]
 import ssl, ctypes, sqlite3, zlib, lzma, bz2, hashlib, json, decimal, uuid
-import greenlet, markupsafe, charset_normalizer.md, sqlalchemy.cyextension.collections
+import greenlet, psycopg2, markupsafe, charset_normalizer.md, sqlalchemy.cyextension.collections
 assert markupsafe._speedups and greenlet._greenlet
 for m in (charset_normalizer.md, sqlalchemy.cyextension.collections, greenlet._greenlet):
     assert m.__file__.endswith(".pyd"), m.__file__
-for m in (ssl, sqlite3, greenlet, markupsafe, sqlalchemy, json):
+assert psycopg2._psycopg.__file__.endswith(".pyd"), psycopg2._psycopg.__file__
+for m in (ssl, sqlite3, greenlet, psycopg2, markupsafe, sqlalchemy, json):
     assert os.path.normcase(m.__file__).startswith(os.path.normcase(b)), (m.__name__, m.__file__)
-print("   imports ok:", ssl.OPENSSL_VERSION, "| sqlite", sqlite3.sqlite_version)' "$(cygpath -w "$B")" "$(cygpath -w "$W/testdeps")" 2>&1 | tee "$L/imports.txt"
+print("   imports ok:", ssl.OPENSSL_VERSION, "| sqlite", sqlite3.sqlite_version, "| psycopg2", psycopg2.__version__, "| libpq", psycopg2.extensions.libpq_version())' "$(cygpath -w "$B")" "$(cygpath -w "$W/testdeps")" 2>&1 | tee "$L/imports.txt"
 du -sh "$B"
 
 # zip with sorted entries and fixed timestamps

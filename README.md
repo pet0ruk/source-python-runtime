@@ -83,7 +83,13 @@ Built on `windows-2022`:
   static C runtime (`/MT`), like Source.Python's Windows build.
 - **markupsafe, charset-normalizer, sqlalchemy** from their official `win32`/`win_amd64` wheels;
   **greenlet** (no `win32` wheel) built from source on both. The win_amd64 bundle also ships
-  `vcruntime140_1.dll`, which 64-bit Python needs. psycopg2 isn't shipped on Windows.
+  `vcruntime140_1.dll`, which 64-bit Python needs.
+- **psycopg2** built from source on both (there is no official `win32` wheel) against a minimal
+  libpq, built from the same PostgreSQL sources as on Linux with PostgreSQL's meson build. libpq
+  links CPython's own OpenSSL build (`python/cpython-bin-deps`, checked to be the same DLLs as the
+  CPython package's), and delvewheel vendors libpq and OpenSSL into the wheel under mangled names,
+  as psycopg2's official wheels do. The build needs Strawberry Perl (on the CI image), and fetches
+  winflexbison, meson, ninja and delvewheel at the versions in `versions/common.sh`.
 
 The same import check runs at the end of the build.
 
