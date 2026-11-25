@@ -260,7 +260,7 @@ if grep -vE " (libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\
 fi
 # the shipped runtime imports its native modules and packages from the bundle alone
 # test-only: sqlalchemy imports typing_extensions, which Source.Python vendors as pure Python
-HOME=$W "$PYBIN" -m pip -q install --no-deps --target "$W/testdeps" typing_extensions==4.13.2 > "$L/testdeps.log" 2>&1
+HOME=$W "$PYBIN" -m pip -q install --no-deps --target "$W/testdeps" typing_extensions==$TYPING_EXTENSIONS > "$L/testdeps.log" 2>&1
 LD_LIBRARY_PATH=$R/plat-linux "$PYBIN" -I -S -B -c '
 import sys
 b = sys.argv[1]
