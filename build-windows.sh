@@ -19,7 +19,8 @@
 #   greenlet has none and is built from source.
 # - psycopg2 is built from source against a minimal libpq (PostgreSQL's meson build, only libpq)
 #   that links CPython's own OpenSSL build; delvewheel vendors libpq.dll and those OpenSSL DLLs into
-#   the wheel under mangled names, as psycopg2's official wheels do (and auditwheel on Linux).
+#   the wheel under mangled names, as psycopg2's official wheels do (and auditwheel on Linux). They
+#   end up next to _psycopg.pyd, so psycopg2's Python files are the same as on Linux.
 #   Needs Strawberry Perl (on the CI image) for PostgreSQL's build.
 # - As on Linux, the stdlib is shipped without the parts a server doesn't use (test, idlelib,
 #   tkinter, turtledemo, ...); the package already omits Tcl/Tk and CPython's test modules.
@@ -176,7 +177,14 @@ grep -q '^pg_config = .*pg_config.bat' "$PSRC/setup.cfg" || { echo "!! setup.cfg
     "$(win "$(ls "$W"/psycopg2-wheel/psycopg2-*.whl)")" >> "$L/psycopg2.log" 2>&1 \
     || { tail -30 "$L/psycopg2.log"; exit 1; }
 "$PYBIN" -m zipfile -e "$(ls "$WH"/psycopg2-*.whl)" "$SITE"
+# delvewheel puts the DLLs in psycopg2.libs and patches psycopg2/__init__.py to add that directory
+# with os.add_dll_directory. Source.Python's release zips hold one copy of each file for Linux and
+# Windows, so keep psycopg2's own __init__.py (the one Linux has) and put the DLLs next to
+# _psycopg.pyd instead: Windows looks for an extension module's DLLs in its own directory.
 ls "$SITE"/psycopg2.libs
+mv "$SITE"/psycopg2.libs/*.dll "$SITE/psycopg2/"
+rmdir "$SITE/psycopg2.libs"
+cp "$PSRC/lib/__init__.py" "$SITE/psycopg2/__init__.py"
 
 echo ">> bundle $NAME"
 R=$B/runtime/addons/source-python/Python3
@@ -197,7 +205,7 @@ cp "$P"/DLLs/*.pyd "$P"/DLLs/*.dll "$R/plat-win/"
 cp "$P/python$PYN.dll" "$P/python3.dll" "$P/vcruntime140.dll" "$R/plat-win/"
 # x64 builds also need vcruntime140_1.dll (C++ exception handling)
 [ "$PLATFORM" = win32 ] || cp "$P/vcruntime140_1.dll" "$R/plat-win/"
-cp -r "$SITE"/{greenlet,psycopg2,psycopg2.libs,markupsafe,charset_normalizer,sqlalchemy} "$S/"
+cp -r "$SITE"/{greenlet,psycopg2,markupsafe,charset_normalizer,sqlalchemy} "$S/"
 rm -rf "$S/greenlet/tests"
 cp "$P/LICENSE.txt" "$B/licenses/cpython.txt"
 cp "$W/$BOOSTN/LICENSE_1_0.txt" "$B/licenses/boost.txt"

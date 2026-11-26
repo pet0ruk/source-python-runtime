@@ -88,7 +88,9 @@ Built on `windows-2022`:
   libpq, built from the same PostgreSQL sources as on Linux with PostgreSQL's meson build. libpq
   links CPython's own OpenSSL build (`python/cpython-bin-deps`, checked to be the same DLLs as the
   CPython package's), and delvewheel vendors libpq and OpenSSL into the wheel under mangled names,
-  as psycopg2's official wheels do. The build needs Strawberry Perl (on the CI image), and fetches
+  as psycopg2's official wheels do. The DLLs go next to `_psycopg.pyd` instead of delvewheel's
+  `psycopg2.libs`, and psycopg2's own `__init__.py` is kept, so psycopg2's Python files are the
+  same as on Linux (Source.Python's release zips hold one copy for both). The build needs Strawberry Perl (on the CI image), and fetches
   winflexbison, meson, ninja and delvewheel at the versions in `versions/common.sh`.
 
 The same import check runs at the end of the build.
